@@ -2,9 +2,21 @@
 
 set -e
 
+# ──────────────────────────────────────────
+# Configuration
+# ──────────────────────────────────────────
+
 LLAMA_DIR="/opt/llama.cpp"
 MODEL_DIR="/opt/models"
-CONFIG_FILE="$(dirname "$0")/config/models.conf"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/config/models.conf"
+AI_MODEL_SCRIPT="$SCRIPT_DIR/scripts/ai-model.sh"
+AI_MODEL_COMMAND="/usr/local/bin/ai-model"
+
+# ──────────────────────────────────────────
+# Header
+# ──────────────────────────────────────────
 
 echo
 echo "╔══════════════════════════════════════════╗"
@@ -13,31 +25,70 @@ echo "╚═══════════════════════�
 echo
 
 # ──────────────────────────────────────────
-# Check configuration
+# Check configuration files
 # ──────────────────────────────────────────
 
+echo "[1/6] Checking project files..."
+
 if [ ! -f "$CONFIG_FILE" ]; then
+    echo
     echo "ERROR: config/models.conf not found."
+    echo
+    echo "Expected:"
+    echo "$CONFIG_FILE"
     exit 1
 fi
 
+if [ ! -f "$AI_MODEL_SCRIPT" ]; then
+    echo
+    echo "ERROR: scripts/ai-model.sh not found."
+    echo
+    echo "Expected:"
+    echo "$AI_MODEL_SCRIPT"
+    exit 1
+fi
+
+echo "✓ Configuration files found."
+
 # ──────────────────────────────────────────
-# Install required packages
+# Check required packages
 # ──────────────────────────────────────────
 
-echo "[1/4] Checking required packages..."
+echo
+echo "[2/6] Checking required packages..."
 
-if ! command -v git >/dev/null 2>&1 || \
-   ! command -v cmake >/dev/null 2>&1; then
+NEED_APT=false
+
+if ! command -v git >/dev/null 2>&1; then
+    NEED_APT=true
+fi
+
+if ! command -v cmake >/dev/null 2>&1; then
+    NEED_APT=true
+fi
+
+if ! command -v g++ >/dev/null 2>&1; then
+    NEED_APT=true
+fi
+
+if [ "$NEED_APT" = true ]; then
 
     echo "Installing build dependencies..."
 
     sudo apt-get update
+
     sudo apt-get install -y \
         git \
         cmake \
         build-essential \
-        curl
+        curl \
+        python3 \
+        python3-pip
+
+else
+
+    echo "✓ Required packages already installed."
+
 fi
 
 # ──────────────────────────────────────────
@@ -45,20 +96,26 @@ fi
 # ──────────────────────────────────────────
 
 echo
-echo "[2/4] Creating model directory..."
+echo "[3/6] Creating directories..."
 
 sudo mkdir -p "$MODEL_DIR"
+
 sudo chmod 777 "$MODEL_DIR"
+
+echo "✓ Model directory:"
+echo "  $MODEL_DIR"
 
 # ──────────────────────────────────────────
 # Install llama.cpp
 # ──────────────────────────────────────────
 
 echo
-echo "[3/4] Checking llama.cpp..."
+echo "[4/6] Checking llama.cpp..."
 
 if [ ! -d "$LLAMA_DIR/.git" ]; then
 
+    echo
+    echo "llama.cpp not found."
     echo "Cloning llama.cpp..."
 
     sudo git clone \
@@ -67,51 +124,101 @@ if [ ! -d "$LLAMA_DIR/.git" ]; then
 
 else
 
-    echo "llama.cpp already installed."
+    echo
+    echo "✓ llama.cpp already exists."
+    echo "$LLAMA_DIR"
+
 fi
+
+# ──────────────────────────────────────────
+# Build llama.cpp
+# ──────────────────────────────────────────
 
 echo
 echo "Building llama.cpp..."
 
-cd "$LLAMA_DIR"
+if [ ! -x "$LLAMA_DIR/build/bin/llama-server" ]; then
 
-if [ ! -f "$LLAMA_DIR/build/bin/llama-server" ]; then
-
-    sudo cmake -B build
+    echo "Configuring CMake..."
 
     sudo cmake \
-        --build build \
+        -B "$LLAMA_DIR/build"
+
+    echo
+    echo "Compiling llama.cpp..."
+
+    sudo cmake \
+        --build "$LLAMA_DIR/build" \
         --config Release \
         -j2
 
 else
 
-    echo "llama-server already exists."
+    echo
+    echo "✓ llama-server already exists."
+    echo "Skipping full build."
+
 fi
 
 # ──────────────────────────────────────────
-# Model menu
+# Verify llama-server
+# ──────────────────────────────────────────
+
+if [ ! -x "$LLAMA_DIR/build/bin/llama-server" ]; then
+
+    echo
+    echo "ERROR: llama-server was not built successfully."
+    echo
+    echo "Expected:"
+    echo "$LLAMA_DIR/build/bin/llama-server"
+
+    exit 1
+
+fi
+
+echo
+echo "✓ llama-server ready."
+
+# ──────────────────────────────────────────
+# Install Hugging Face CLI
 # ──────────────────────────────────────────
 
 echo
-echo "╔══════════════════════════════════════════╗"
-echo "║             MODEL INSTALLER              ║"
-echo "╠══════════════════════════════════════════╣"
+echo "[5/6] Checking Hugging Face CLI..."
 
-echo "║ 1. Qwen2.5-Coder-7B Abliterated          ║"
-echo "║ 2. Qwen3.5-4B Super Coder                ║"
-echo "║ 3. Gemma 4 E4B-it                        ║"
-echo "║ 4. Gemma 4 E2B-it                        ║"
-echo "║ 5. Qwen2.5-Coder-3B                      ║"
-echo "║ 6. Install ALL models                    ║"
-echo "║ 0. Exit                                  ║"
-echo "╚══════════════════════════════════════════╝"
-echo
+if command -v hf >/dev/null 2>&1; then
 
-read -rp "Select model: " MODEL_CHOICE
+    echo "✓ hf command already installed."
+
+else
+
+    echo "Installing Hugging Face Hub..."
+
+    python3 -m pip install \
+        --user \
+        -U \
+        huggingface_hub
+
+    export PATH="$HOME/.local/bin:$PATH"
+
+fi
+
+if ! command -v hf >/dev/null 2>&1; then
+
+    echo
+    echo "ERROR: Hugging Face CLI (hf) is not available."
+    echo
+    echo "Try:"
+    echo "python3 -m pip install --user -U huggingface_hub"
+
+    exit 1
+
+fi
+
+echo "✓ hf command ready."
 
 # ──────────────────────────────────────────
-# Model installer
+# Model installer function
 # ──────────────────────────────────────────
 
 install_model() {
@@ -125,44 +232,105 @@ install_model() {
     local TARGET_FILE="$TARGET_DIR/$FILE"
 
     echo
-    echo "=========================================="
-    echo "Installing: $MODEL_NAME"
-    echo "=========================================="
+    echo "╔══════════════════════════════════════════╗"
+    echo "║             MODEL INSTALL                ║"
+    echo "╚══════════════════════════════════════════╝"
+
+    echo
+    echo "Model:"
+    echo "$MODEL_NAME"
+
+    echo
+    echo "Repository:"
+    echo "$REPO"
+
+    echo
+    echo "File:"
+    echo "$FILE"
+
+    echo
+    echo "Install directory:"
+    echo "$TARGET_DIR"
 
     sudo mkdir -p "$TARGET_DIR"
+
     sudo chmod 777 "$TARGET_DIR"
+
+    # ──────────────────────────────────────
+    # Check existing model
+    # ──────────────────────────────────────
 
     if [ -f "$TARGET_FILE" ]; then
 
         echo
-        echo "Model already exists:"
+        echo "✓ Model already installed."
+        echo
         echo "$TARGET_FILE"
         echo
         echo "Skipping download."
 
-        return
-    fi
-
-    echo
-    echo "Downloading:"
-    echo "$FILE"
-    echo
-
-    if ! command -v hf >/dev/null 2>&1; then
-
-        echo "Installing Hugging Face CLI..."
-
-        python3 -m pip install --user -U huggingface_hub
+        return 0
 
     fi
 
-    hf download "$REPO" \
+    # ──────────────────────────────────────
+    # Download model
+    # ──────────────────────────────────────
+
+    echo
+    echo "Downloading model..."
+    echo
+
+    hf download \
+        "$REPO" \
         "$FILE" \
         --local-dir "$TARGET_DIR"
 
+    # ──────────────────────────────────────
+    # Verify download
+    # ──────────────────────────────────────
+
+    if [ ! -f "$TARGET_FILE" ]; then
+
+        echo
+        echo "ERROR: Model download failed."
+        echo
+        echo "Expected file:"
+        echo "$TARGET_FILE"
+
+        return 1
+
+    fi
+
     echo
-    echo "✓ $MODEL_NAME installed successfully."
+    echo "✓ Model installed successfully."
+
+    echo
+    ls -lh "$TARGET_FILE"
 }
+
+# ──────────────────────────────────────────
+# Model menu
+# ──────────────────────────────────────────
+
+echo
+echo "[6/6] Model installation"
+echo
+
+echo "╔══════════════════════════════════════════╗"
+echo "║             MODEL INSTALLER              ║"
+echo "╠══════════════════════════════════════════╣"
+echo "║ 1. Qwen2.5-Coder-7B Abliterated          ║"
+echo "║ 2. Qwen3.5-4B Super Coder                ║"
+echo "║ 3. Gemma 4 E4B-it                        ║"
+echo "║ 4. Gemma 4 E2B-it                        ║"
+echo "║ 5. Qwen2.5-Coder-3B                      ║"
+echo "║ 6. Install ALL models                    ║"
+echo "║ 0. Exit                                  ║"
+echo "╚══════════════════════════════════════════╝"
+echo
+
+read -rp "Select model: " MODEL_CHOICE
 
 # ──────────────────────────────────────────
 # Read model configuration
@@ -173,74 +341,89 @@ get_model() {
     local NUMBER="$1"
 
     sed -n "${NUMBER}p" "$CONFIG_FILE"
+
 }
 
 # ──────────────────────────────────────────
-# Execute selection
+# Install selected model
+# ──────────────────────────────────────────
+
+install_selected_model() {
+
+    local NUMBER="$1"
+
+    local LINE
+
+    LINE="$(get_model "$NUMBER")"
+
+    if [ -z "$LINE" ]; then
+
+        echo
+        echo "ERROR: Model configuration not found."
+        echo "Line: $NUMBER"
+
+        exit 1
+
+    fi
+
+    IFS='|' read -r NAME REPO FILE DIR <<< "$LINE"
+
+    install_model \
+        "$NAME" \
+        "$REPO" \
+        "$FILE" \
+        "$DIR"
+}
+
+# ──────────────────────────────────────────
+# Menu selection
 # ──────────────────────────────────────────
 
 case "$MODEL_CHOICE" in
 
     1)
-        IFS='|' read -r NAME REPO FILE DIR <<< "$(get_model 1)"
 
-        install_model \
-            "$NAME" \
-            "$REPO" \
-            "$FILE" \
-            "$DIR"
+        install_selected_model 1
+
         ;;
 
     2)
-        IFS='|' read -r NAME REPO FILE DIR <<< "$(get_model 2)"
 
-        install_model \
-            "$NAME" \
-            "$REPO" \
-            "$FILE" \
-            "$DIR"
+        install_selected_model 2
+
         ;;
 
     3)
-        IFS='|' read -r NAME REPO FILE DIR <<< "$(get_model 3)"
 
-        install_model \
-            "$NAME" \
-            "$REPO" \
-            "$FILE" \
-            "$DIR"
+        install_selected_model 3
+
         ;;
 
     4)
-        IFS='|' read -r NAME REPO FILE DIR <<< "$(get_model 4)"
 
-        install_model \
-            "$NAME" \
-            "$REPO" \
-            "$FILE" \
-            "$DIR"
+        install_selected_model 4
+
         ;;
 
     5)
-        IFS='|' read -r NAME REPO FILE DIR <<< "$(get_model 5)"
 
-        install_model \
-            "$NAME" \
-            "$REPO" \
-            "$FILE" \
-            "$DIR"
+        install_selected_model 5
+
         ;;
 
     6)
 
         echo
-        echo "Installing all models..."
+        echo "Installing ALL models..."
         echo
 
         while IFS='|' read -r NAME REPO FILE DIR
         do
 
+            # Skip empty lines
             [ -z "$NAME" ] && continue
+
+            # Skip comments
             [[ "$NAME" =~ ^# ]] && continue
 
             install_model \
@@ -255,21 +438,86 @@ case "$MODEL_CHOICE" in
 
     0)
 
-        echo "Exiting."
+        echo
+        echo "Installation cancelled."
         exit 0
+
         ;;
 
     *)
 
         echo
-        echo "Invalid selection."
+        echo "ERROR: Invalid selection."
+        echo
+        echo "Please choose 0-6."
+
         exit 1
+
         ;;
 
 esac
 
 # ──────────────────────────────────────────
-# Final status
+# Install ai-model command
+# ──────────────────────────────────────────
+
+echo
+echo "Installing ai-model command..."
+
+sudo cp \
+    "$AI_MODEL_SCRIPT" \
+    "$AI_MODEL_COMMAND"
+
+sudo chmod +x \
+    "$AI_MODEL_COMMAND"
+
+# ──────────────────────────────────────────
+# Verify ai-model command
+# ──────────────────────────────────────────
+
+if [ ! -x "$AI_MODEL_COMMAND" ]; then
+
+    echo
+    echo "ERROR: Failed to install ai-model command."
+    exit 1
+
+fi
+
+echo
+echo "✓ ai-model command installed."
+echo
+echo "Location:"
+echo "$AI_MODEL_COMMAND"
+
+# ──────────────────────────────────────────
+# Show installed models
+# ──────────────────────────────────────────
+
+echo
+echo "╔══════════════════════════════════════════╗"
+echo "║          INSTALLED GGUF MODELS           ║"
+echo "╚══════════════════════════════════════════╝"
+echo
+
+if find "$MODEL_DIR" \
+    -type f \
+    -name "*.gguf" \
+    -print -quit 2>/dev/null | grep -q .
+then
+
+    find "$MODEL_DIR" \
+        -type f \
+        -name "*.gguf" \
+        -exec ls -lh {} \;
+
+else
+
+    echo "No GGUF models installed."
+
+fi
+
+# ──────────────────────────────────────────
+# Final message
 # ──────────────────────────────────────────
 
 echo
@@ -282,13 +530,14 @@ echo "llama-server:"
 echo "$LLAMA_DIR/build/bin/llama-server"
 
 echo
-echo "Models:"
-find "$MODEL_DIR" \
-    -type f \
-    -name "*.gguf" \
-    -exec ls -lh {} \;
+echo "ai-model:"
+echo "$AI_MODEL_COMMAND"
 
 echo
-echo "Next step:"
-echo "Run the ai-model command."
+echo "To start the AI Web UI, run:"
+echo
+echo "    ai-model"
+echo
+
+echo "Installation finished successfully."
 echo
